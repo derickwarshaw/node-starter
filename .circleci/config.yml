@@ -1,0 +1,130 @@
+# Javascript Node CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-javascript/ for more details
+#
+version: 2
+jobs:
+
+  yarn:
+    docker:
+      # specify the version you desire here
+      - image: circleci/node:10.10.0-stretch-browsers-legacy
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout
+      # Download and cache dependencies
+      - restore_cache:
+          keys:
+          - yarn-cache-{{ checksum "yarn.lock" }}
+      - run: yarn install
+      - save_cache:
+          paths:
+            - node_modules
+          key: yarn-cache-{{ checksum "yarn.lock" }}
+      - persist_to_workspace:
+          root: .
+          paths:
+            - node_modules
+
+  lint:
+    docker:
+      - image: circleci/node:10.10.0-stretch-browsers-legacy
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - attach_workspace:
+          at: ~/repo
+      - run:
+          name: Linting
+          command: yarn lint
+
+  unit-tests:
+    docker:
+      - image: circleci/node:10.10.0-stretch-browsers-legacy
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - attach_workspace:
+          at: ~/repo
+      - run:
+          name: Unit Tests
+          command: yarn test:unit
+
+  integration-tests:
+    docker:
+      - image: circleci/node:10.10.0-stretch-browsers-legacy
+      - image: circleci/postgres:9.6.2-alpine
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_DB: circle-test_test
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - attach_workspace:
+          at: ~/repo
+      - run:
+          name: Integration Tests
+          command: yarn test:integration
+
+  build:
+    docker:
+      - image: circleci/node:10.10.0-stretch-browsers-legacy
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - attach_workspace:
+          at: ~/repo
+      - run:
+          name: Build
+          command: yarn build
+      - persist_to_workspace:
+          root: .
+          paths:
+            # This path can be used by other jobs
+            - dist
+
+  deploy-dev:
+      machine: true
+      steps:
+        - checkout
+        - run:
+            name: Build and push Docker image to development
+            command: |
+              docker build -t connectingthings/cms-social-api:dev .
+              docker login -u $DOCKER_USER -p $DOCKER_PASS
+              docker push connectingthings/cms-social-api:dev
+              apt-get update && apt-get install -y awscli
+              /bin/bash scripts/EB-deploy.dev.sh $CIRCLE_SHA1
+
+workflows:
+  version: 2
+
+  test-build-deploy:
+    jobs:
+      - yarn
+      - lint:
+          requires:
+            - yarn
+      - unit-tests:
+          requires:
+            - yarn
+      - integration-tests:
+          requires:
+            - yarn
+      - build:
+          requires:
+            - yarn
+          filters:
+            branches:
+              only:
+                - master
+      - deploy-dev:
+          requires:
+            - unit-tests
+            - integration-tests
+            - build
+          filters:
+            branches:
+              only: master
